@@ -12,12 +12,23 @@ A specialist AI employee that handles end-to-end bookkeeping (transaction catego
 
 Read in this order:
 
-1. **`lessons/CTO-postmortem-for-Bookie.md`** — what went wrong with the previous agent project (CTO). The mistakes Bookie must not repeat.
-2. **`lessons/Bookie-design-research-synthesis.md`** — the consolidated design input across all five research streams. The "what to build" doc.
-3. **`research/`** — the raw research stream outputs (QuickBooks API, competitive landscape, workflow domain, architecture, compliance). Source material behind the synthesis.
-4. **`lessons/browser-automation-escalation-ladder.md`** — how Bookie should approach any website it needs to interact with (bank portals, vendor invoices, receipts).
-5. **`prd/`** — product requirements doc (written next).
-6. **`docs/`** — additional design and operations documentation.
+1. **`prd/Bookie-PRD.md`** — what we're building.
+2. **`lessons/CTO-postmortem-for-Bookie.md`** — what went wrong with the previous agent project. The mistakes Bookie must not repeat.
+3. **`lessons/Bookie-design-research-synthesis.md`** — the consolidated design input across all five research streams.
+4. **`research/`** — raw research stream outputs (QuickBooks API, competitive landscape, workflow domain, architecture, compliance).
+5. **`lessons/browser-automation-escalation-ladder.md`** — how Bookie approaches any website it needs to interact with.
+6. **`employee-workspace/`** — canonical source for Bookie's SOUL/MEMORY/HEARTBEAT/AGENTS/STYLE/TOOLS/USER files. `install.sh` syncs these into OpenHarness/employees/bookie/ at install time.
+7. **`src/bookie/`** — Python source. `categorizer.py` holds the decision chain.
+8. **`tests/`** — pytest unit tests (9 currently, all green).
+9. **`bin/bookie`** — CLI entry point: `bookie self-check`, `bookie categorize --feed FEED.json`.
+
+## Quick start
+
+```bash
+bash install.sh         # runs self-check, syncs to OpenHarness if present
+./bin/bookie self-check
+python3 -m pytest tests/ -v
+```
 
 ## Reporting structure
 
