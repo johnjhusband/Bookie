@@ -2,11 +2,20 @@
 # qbo-authorize.sh — interactive OAuth flow for QuickBooks Online sandbox.
 #
 # Prereqs:
-#   1. You have an Intuit Developer account (developer.intuit.com)
-#   2. You created an app there; copy its Client ID and Client Secret into
-#      ~/.config/bookie/qbo-credentials.json (start from
-#      config/qbo-credentials.template.json)
-#   3. Your app has http://localhost:8910/qbo-callback as a Redirect URI
+#   1. Intuit Developer account at https://developer.intuit.com
+#      (free, auto-enrolled in the Builder tier of the App Partner Program)
+#   2. In My Hub → Workspaces, create a Workspace, then create an app of type
+#      "QuickBooks Online (Accounting)" named "Bookie".
+#   3. In the app's "Keys & Credentials → Development" section, copy the
+#      Client ID and Client Secret into ~/.config/bookie/qbo-credentials.json
+#      (start from config/qbo-credentials.template.json).
+#      NOTE: Development and Production have DIFFERENT key pairs; use Development.
+#   4. Under "Redirect URIs (Development)", add EXACTLY:
+#         http://localhost:8910/qbo-callback
+#      (case-sensitive, trailing-slash sensitive)
+#   5. Under "Reconnect URL" (mandatory as of Feb 24, 2026), add any URL where
+#      you'd want users sent when their refresh token approaches the 5-year cap.
+#      For now this can be the same localhost URL; matters more for production.
 #
 # This script:
 #   - Spins up a tiny local HTTP server on :8910 to catch the OAuth redirect
@@ -24,7 +33,7 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 python3 - "$CONFIG" <<'PY'
-import json, sys, webbrowser, http.server, urllib.parse, urllib.request, base64
+import json, sys, webbrowser, http.server, urllib.parse, urllib.request, base64, secrets
 
 CONFIG = sys.argv[1]
 with open(CONFIG) as f:
@@ -38,7 +47,8 @@ CLIENT_SECRET = cfg["client_secret"]
 ENV = cfg.get("environment", "sandbox")
 REDIRECT_URI = "http://localhost:8910/qbo-callback"
 SCOPE = "com.intuit.quickbooks.accounting"
-STATE = base64.urlsafe_b64encode(b"bookie-oauth").decode()
+# CSRF state — cryptographically random per session, validated on the redirect.
+STATE = secrets.token_urlsafe(32)
 
 authorize_url = (
     "https://appcenter.intuit.com/connect/oauth2"
@@ -75,6 +85,19 @@ print("Waiting for redirect on http://localhost:8910/qbo-callback ...")
 while "code" not in result:
     server.handle_request()
 
+# CSRF check: returned state MUST match what we sent
+if result.get("state") != STATE:
+    print(f"ERROR: state mismatch (CSRF protection). Expected {STATE!r}, got {result.get('state')!r}",
+          file=sys.stderr)
+    sys.exit(2)
+
+# realmId must be populated for accounting scope; without it every API call 404s
+if not result.get("realmId"):
+    print("ERROR: redirect did not include realmId. Confirm app scope is "
+          "'com.intuit.quickbooks.accounting' and you selected a sandbox company.",
+          file=sys.stderr)
+    sys.exit(2)
+
 print(f"Got authorization code (realmId={result['realmId']}). Exchanging for tokens...")
 creds = f"{CLIENT_ID}:{CLIENT_SECRET}".encode()
 auth_header = base64.b64encode(creds).decode()
@@ -94,10 +117,15 @@ req = urllib.request.Request(
 with urllib.request.urlopen(req, timeout=30) as r:
     tok = json.loads(r.read().decode())
 
+import time as _t
+now = _t.time()
 cfg["refresh_token"] = tok["refresh_token"]
 cfg["access_token"] = tok["access_token"]
-import time as _t
-cfg["access_token_expires_at"] = _t.time() + int(tok.get("expires_in", 3600)) - 60
+cfg["access_token_expires_at"] = now + int(tok.get("expires_in", 3600)) - 60
+# Refresh tokens cap out at 5 years (Nov 2025 policy); capture when this one dies
+# so the daemon can warn before forced reconnect.
+if "x_refresh_token_expires_in" in tok:
+    cfg["refresh_token_expires_at"] = now + int(tok["x_refresh_token_expires_in"])
 cfg["realm_id"] = result["realmId"]
 with open(CONFIG, "w") as f:
     json.dump(cfg, f, indent=2)

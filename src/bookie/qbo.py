@@ -39,6 +39,9 @@ class QBOConfig:
     environment: str = "sandbox"
     access_token: str = ""
     access_token_expires_at: float = 0.0
+    # Refresh tokens are capped at 5 years (Intuit Nov 2025 policy). When this
+    # is set, daemon can warn / trigger Reconnect URL flow before expiry.
+    refresh_token_expires_at: float = 0.0
 
     @property
     def api_base(self) -> str:
@@ -78,6 +81,7 @@ def load_config(path: str | Path) -> QBOConfig:
         environment=d.get("environment", "sandbox"),
         access_token=d.get("access_token", ""),
         access_token_expires_at=float(d.get("access_token_expires_at", 0.0)),
+        refresh_token_expires_at=float(d.get("refresh_token_expires_at", 0.0)),
     )
 
 
@@ -93,6 +97,7 @@ def save_config(cfg: QBOConfig, path: str | Path) -> None:
         "environment": cfg.environment,
         "access_token": cfg.access_token,
         "access_token_expires_at": cfg.access_token_expires_at,
+        "refresh_token_expires_at": cfg.refresh_token_expires_at,
     }, indent=2))
     p.chmod(0o600)
 
@@ -120,10 +125,15 @@ def refresh_access_token(cfg: QBOConfig) -> QBOConfig:
             data = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise QBOError(f"OAuth refresh failed HTTP {e.code}: {e.read().decode()[:300]}") from e
+    now = time.time()
     cfg.access_token = data["access_token"]
-    cfg.access_token_expires_at = time.time() + int(data.get("expires_in", 3600)) - 60
+    cfg.access_token_expires_at = now + int(data.get("expires_in", 3600)) - 60
+    # Refresh token rotates roughly every 24h; persist the new one immediately
+    # or we silently lose access on the next refresh.
     if "refresh_token" in data:
         cfg.refresh_token = data["refresh_token"]
+    if "x_refresh_token_expires_in" in data:
+        cfg.refresh_token_expires_at = now + int(data["x_refresh_token_expires_in"])
     return cfg
 
 

@@ -28,9 +28,10 @@ import urllib.parse
 from bookie.models import Transaction
 
 
+# Plaid retired the "development" environment on 2024-06-20. Only sandbox + production remain.
+# New developers get a free Trial plan (up to 10 production items) when they sign up after 2026-04-15.
 PLAID_HOSTS = {
     "sandbox": "https://sandbox.plaid.com",
-    "development": "https://development.plaid.com",
     "production": "https://production.plaid.com",
 }
 
