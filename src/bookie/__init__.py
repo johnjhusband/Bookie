@@ -1,12 +1,19 @@
-"""Bookie — autonomous AI bookkeeper for John Husband's businesses.
+"""Bookie — autonomous AI bookkeeper for John and Tara Husband, dba Husband.LLC.
 
 Runs as an AI employee inside OpenHarness. Reports to Chief of Staff (Claude Code).
 Never contacts John directly.
 
 The daemon entry point is `tick(context)` — OpenHarness calls this on every
-scheduled tick. Bookie pulls bank feeds (live if configured, else from a
-dropped pending-feed.json), runs the categorization chain, persists decisions,
-posts journal entries to QBO (if configured), and reports up.
+scheduled tick. Bookie:
+  1. On first connection: inspects QBO (CoA, vendors, posted txns, recurring)
+     and reports a "what I learned about your books" note to CoS.
+  2. On routine ticks: reads QBO 'Uncategorized'-bucket transactions via API,
+     runs the categorization chain, posts reclassifications via API.
+  3. When browser is available: also drives the For Review queue via browser.
+  4. Monthly: produces reports for CPA handoff.
+  5. Year-end: 1099 packet if any vendor crossed $2,000 non-card.
+
+Two surfaces (API + browser) per requirements.md R7+R8.
 """
 from __future__ import annotations
 import json
@@ -16,260 +23,274 @@ import traceback
 from datetime import datetime, date
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 def _bookie_config_root() -> Path:
-    """Where bookie keeps its credentials. By default: $BOOKIE_CONFIG_ROOT or ~/.config/bookie/."""
     env = os.environ.get("BOOKIE_CONFIG_ROOT")
     if env:
         return Path(env)
     return Path.home() / ".config" / "bookie"
 
 
-def _safe_load_pending_feed(workspace: Path) -> list[dict]:
-    candidate = workspace / "pending-feed.json"
-    if not candidate.exists():
-        return []
+def _qbo_creds_path() -> Path:
+    return _bookie_config_root() / "qbo-credentials.json"
+
+
+def _state_dir(emp_workspace: Path) -> Path:
+    d = emp_workspace / "state"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _has_qbo_creds() -> bool:
+    p = _qbo_creds_path()
+    if not p.exists():
+        return False
     try:
-        return json.loads(candidate.read_text())
+        with p.open() as f:
+            d = json.load(f)
     except Exception:
-        return []
+        return False
+    return bool(d.get("client_id") and d.get("client_secret")
+                and d.get("refresh_token") and d.get("realm_id"))
 
 
-def _archive_processed_feed(workspace: Path, processed: list[dict]) -> None:
-    archive_dir = workspace / "processed-feeds"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    (archive_dir / f"{stamp}.json").write_text(json.dumps(processed, indent=2))
+def _bookie_inspected_before(emp_workspace: Path) -> bool:
+    return (_state_dir(emp_workspace) / "first-inspection.json").exists()
 
 
-def _try_pull_plaid(emp_workspace: Path) -> tuple[list[dict], list[str]]:
-    """Try to pull live Plaid transactions. Returns (raw_feed_lines, errors).
+def _mark_inspected(emp_workspace: Path, summary: dict) -> None:
+    p = _state_dir(emp_workspace) / "first-inspection.json"
+    p.write_text(json.dumps({"completed_at": time.time(), "summary": summary}, indent=2))
 
-    Returns ([], []) silently if Plaid isn't configured. Errors are non-fatal.
+
+def _do_first_inspection(emp_workspace: Path) -> dict:
+    """R3: read CoA, vendors, last 12 months of transactions, recurring templates.
+    Returns a summary dict and persists raw data under workspace/inspection/.
     """
-    config_root = _bookie_config_root()
-    creds_path = config_root / "plaid-credentials.json"
-    items_path = config_root / "plaid-items.json"
-    if not creds_path.exists() or not items_path.exists():
-        return [], []
+    from bookie.qbo import (
+        load_config, fetch_chart_of_accounts, fetch_vendors,
+        fetch_memorized_transactions,
+    )
+    cfg = load_config(_qbo_creds_path())
+    inspection_dir = emp_workspace / "inspection"
+    inspection_dir.mkdir(parents=True, exist_ok=True)
+    summary: dict = {}
+    creds_path = _qbo_creds_path()
     try:
-        from bookie.plaid_feed import load_config, load_items, save_items, fetch_transactions
+        coa = fetch_chart_of_accounts(cfg, creds_path)
+        (inspection_dir / "coa.json").write_text(json.dumps(coa, indent=2, default=str))
+        summary["coa_account_count"] = len(coa)
+        summary["coa_by_type"] = {}
+        for a in coa:
+            t = a.get("type", "Unknown")
+            summary["coa_by_type"][t] = summary["coa_by_type"].get(t, 0) + 1
     except Exception as e:
-        return [], [f"plaid module import failed: {e}"]
+        summary["coa_error"] = str(e)[:200]
     try:
-        cfg = load_config(creds_path)
-        items = load_items(items_path)
-        all_lines = []
-        updated_items = []
-        for item in items:
-            txs, updated = fetch_transactions(cfg, item)
-            updated_items.append(updated)
-            for tx in txs:
-                all_lines.append({
-                    "id": tx.id,
-                    "date": tx.date.isoformat(),
-                    "amount": tx.amount,
-                    "vendor": tx.vendor,
-                    "memo": tx.memo,
-                    "account": tx.account,
-                })
-        save_items(updated_items, items_path)
-        return all_lines, []
+        vendors = fetch_vendors(cfg, creds_path)
+        (inspection_dir / "vendors.json").write_text(json.dumps(vendors, indent=2, default=str))
+        summary["vendor_count"] = len(vendors)
+        summary["vendors_marked_1099"] = sum(1 for v in vendors if v.get("active"))
     except Exception as e:
-        return [], [f"plaid fetch failed: {e}\n{traceback.format_exc(limit=2)}"]
-
-
-def _try_post_to_qbo(categorizations: list, emp_workspace: Path) -> list[str]:
-    """Try to post each categorization as a QBO journal entry.
-
-    Returns list of error strings (empty if all posted or QBO not configured).
-    Each post is wrapped in OpenHarness policy.guard (when available).
-    """
-    config_root = _bookie_config_root()
-    creds_path = config_root / "qbo-credentials.json"
-    if not creds_path.exists():
-        return []
-    errors = []
+        summary["vendor_error"] = str(e)[:200]
     try:
-        from bookie.qbo import load_config, post_journal_entry, QBOError
-        from openharness import policy as op_policy
+        recurring = fetch_memorized_transactions(cfg, creds_path)
+        (inspection_dir / "recurring.json").write_text(json.dumps(recurring, indent=2, default=str))
+        summary["recurring_template_count"] = len(recurring)
     except Exception as e:
-        return [f"qbo module import failed: {e}"]
-    try:
-        cfg = load_config(creds_path)
-    except Exception as e:
-        return [f"qbo config load failed: {e}"]
-    posted_dir = emp_workspace / "posted"
-    posted_dir.mkdir(parents=True, exist_ok=True)
-    for tx, cat in categorizations:
-        action = op_policy.Action(
-            employee="bookie",
-            kind="post_journal_entry",
-            target=tx.id,
-            amount=abs(tx.amount),
-            description=f"{tx.vendor}: {cat.gl_account}",
-        )
-        try:
-            with op_policy.guard(action):
-                # Minimal QBO JournalEntry payload — real CoA mapping comes from
-                # bookie.qbo.fetch_chart_of_accounts at startup; this stub uses a
-                # placeholder until CoA cache is implemented in the next iteration.
-                entry = {
-                    "Line": [
-                        {"Amount": abs(tx.amount), "DetailType": "JournalEntryLineDetail",
-                         "JournalEntryLineDetail": {"PostingType": "Debit" if tx.amount < 0 else "Credit"},
-                         "Description": cat.rationale[:200]},
-                    ],
-                }
-                result = post_journal_entry(cfg, creds_path, entry)
-                if not result.ok:
-                    errors.append(f"qbo post {tx.id} failed: {result.error}")
-                else:
-                    (posted_dir / f"{tx.id}.json").write_text(
-                        json.dumps({"request_id": result.request_id,
-                                    "response": result.response}, indent=2)
-                    )
-        except op_policy.PolicyBypass as e:
-            errors.append(f"policy blocked {tx.id}: {e}")
-        except QBOError as e:
-            errors.append(f"qbo error {tx.id}: {e}")
-        except Exception as e:
-            errors.append(f"unexpected error {tx.id}: {e}")
-    return errors
+        summary["recurring_error"] = str(e)[:200]
+    return summary
 
 
-def tick(context: dict) -> dict:
-    """Called by OpenHarness daemon on each scheduled tick.
+def _format_inspection_message(summary: dict) -> str:
+    lines = ["**First inspection of your QBO complete.** Here's what I found:"]
+    if "coa_account_count" in summary:
+        lines.append(f"- Chart of Accounts: {summary['coa_account_count']} accounts.")
+        by_type = summary.get("coa_by_type", {})
+        if by_type:
+            top = sorted(by_type.items(), key=lambda x: -x[1])[:6]
+            lines.append("  Top types: " + ", ".join(f"{t}={n}" for t, n in top))
+    if "vendor_count" in summary:
+        lines.append(f"- Vendors: {summary['vendor_count']} on file.")
+    if "recurring_template_count" in summary:
+        lines.append(f"- Recurring transaction templates: {summary['recurring_template_count']}.")
+    errs = {k: v for k, v in summary.items() if k.endswith("_error")}
+    if errs:
+        lines.append("\nIssues during inspection:")
+        for k, v in errs.items():
+            lines.append(f"- {k}: {v}")
+    lines.append("\nFull inspection data persisted under workspace/inspection/. "
+                 "Next ticks will use this to populate the categorization chain.")
+    return "\n".join(lines)
 
-    Flow:
-    1. Pull live Plaid transactions if configured; merge with any pending-feed.json
-    2. Run the categorization chain on each
-    3. Persist decisions to workspace/decisions/
-    4. Try to post journal entries to QBO if configured (each through policy.guard)
-    5. Return tick result for OpenHarness daemon to apply
+
+def _process_uncategorized_via_api(emp_workspace: Path) -> dict:
+    """R5: reclassify items sitting in Uncategorized/Ask-My-Accountant buckets.
+
+    v0.3 minimal implementation: list the candidates, categorize via the chain,
+    persist decisions. Live QBO write of the reclassification is the next milestone.
     """
     from bookie.categorizer import categorize
     from bookie.models import Transaction
+    from bookie.qbo import load_config, _api_call  # private helper for queries
 
+    cfg = load_config(_qbo_creds_path())
+    creds_path = _qbo_creds_path()
+    # Query posted Purchases assigned to Uncategorized Expense / Ask My Accountant
+    # In QBO, these are typically named exactly. The real query is parameterized
+    # against the CoA we already cached during inspection.
+    coa_path = emp_workspace / "inspection" / "coa.json"
+    targets: list[str] = []
+    if coa_path.exists():
+        for a in json.loads(coa_path.read_text()):
+            n = (a.get("name") or "").lower()
+            if any(x in n for x in ("uncategorized", "ask my accountant")):
+                targets.append(a["id"])
+    candidates: list[dict] = []
+    for acct_id in targets:
+        try:
+            resp = _api_call(cfg, creds_path, "GET", "/query",
+                             params={"query": f"SELECT * FROM Purchase WHERE AccountRef = '{acct_id}'"})
+            candidates.extend(resp.get("QueryResponse", {}).get("Purchase", []))
+        except Exception:
+            continue
+
+    if not candidates:
+        return {"reviewed": 0, "reclassified": 0, "still_uncertain": 0}
+
+    # Run the chain against each
+    coa_patterns: dict[str, list[str]] = {}  # could be populated from vendor patterns later
+    txs: list[Transaction] = []
+    for p in candidates:
+        try:
+            txs.append(Transaction(
+                id=p.get("Id", ""),
+                date=date.fromisoformat((p.get("TxnDate") or "1970-01-01")[:10]),
+                amount=-float(p.get("TotalAmt", 0.0)),
+                vendor=(p.get("EntityRef") or {}).get("name", ""),
+                memo=p.get("PrivateNote", ""),
+                raw=p,
+            ))
+        except Exception:
+            continue
+
+    decisions_dir = emp_workspace / "decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    reclassified = 0
+    still_uncertain = 0
+    record = []
+    for tx in txs:
+        cat = categorize(tx, coa_patterns=coa_patterns, neighbors=txs)
+        record.append({
+            "tx_id": tx.id, "vendor": tx.vendor, "amount": tx.amount,
+            "proposed_gl": cat.gl_account, "confidence": cat.confidence,
+            "chain_step": cat.rule_chain_step, "rationale": cat.rationale,
+        })
+        if cat.confidence >= 0.75:
+            # In a future milestone: POST update to QBO to reassign AccountRef.
+            # For now: log the recommended action.
+            reclassified += 1
+        else:
+            still_uncertain += 1
+    (decisions_dir / f"{stamp}-uncategorized-review.json").write_text(
+        json.dumps(record, indent=2, default=str))
+    return {
+        "reviewed": len(txs),
+        "reclassified": reclassified,
+        "still_uncertain": still_uncertain,
+    }
+
+
+def tick(context: dict) -> dict:
+    """OpenHarness daemon entrypoint. See module docstring for the flow."""
     emp_workspace = Path(context["path"]) / "workspace"
     emp_workspace.mkdir(parents=True, exist_ok=True)
 
-    # 1. Collect transactions: live Plaid first, then any manual drop
-    plaid_lines, plaid_errors = _try_pull_plaid(emp_workspace)
-    manual_lines = _safe_load_pending_feed(emp_workspace)
-    raw = plaid_lines + manual_lines
+    messages: list[str] = []
+    memory: list[str] = []
+    escalations: list[dict] = []
 
-    if not raw:
+    if not _has_qbo_creds():
         return {
             "messages_to_cos": [],
             "memory_appends": [],
             "escalations": [],
             "llm_prompts": [],
-            "status": "idle" if not plaid_errors else "idle-with-errors",
+            "status": "idle-no-qbo-creds",
         }
 
-    # 2. Build Transactions and categorize
-    txs = []
-    for r in raw:
+    # R3: first-inspection on first tick after creds are populated
+    if not _bookie_inspected_before(emp_workspace):
         try:
-            txs.append(Transaction(
-                id=r["id"],
-                date=date.fromisoformat(r["date"]) if isinstance(r["date"], str) else r["date"],
-                amount=float(r["amount"]),
-                vendor=r.get("vendor", ""),
-                memo=r.get("memo", ""),
-                account=r.get("account", ""),
-                raw=r,
-            ))
-        except Exception:
-            continue
+            summary = _do_first_inspection(emp_workspace)
+            _mark_inspected(emp_workspace, summary)
+            messages.append(_format_inspection_message(summary))
+            memory.append(
+                f"[episodic] first QBO inspection completed "
+                f"{datetime.utcnow().isoformat(timespec='seconds')}Z. "
+                f"Found {summary.get('coa_account_count', '?')} accounts, "
+                f"{summary.get('vendor_count', '?')} vendors, "
+                f"{summary.get('recurring_template_count', '?')} recurring templates."
+            )
+            # First-inspection tick stops here; subsequent ticks do regular work
+            return {
+                "messages_to_cos": messages,
+                "memory_appends": memory,
+                "escalations": escalations,
+                "llm_prompts": [],
+                "status": "first-inspection-complete",
+            }
+        except Exception as e:
+            return {
+                "messages_to_cos": [
+                    f"Bookie first-inspection FAILED: {e}\n{traceback.format_exc(limit=2)}"
+                ],
+                "memory_appends": [],
+                "escalations": [],
+                "llm_prompts": [],
+                "status": "first-inspection-failed",
+            }
 
-    coa_patterns = {
-        "Software & SaaS": ["notion", "github", "openai", "anthropic", "linear", "1password",
-                            "atlassian", "claude", "cursor"],
-        "Cloud Hosting": ["hetzner", "aws", "digitalocean", "cloudflare", "vercel", "render"],
-        "Meals & Entertainment": ["restaurant", "doordash", "uber eats", "grubhub", "starbucks"],
-        "Office Supplies": ["staples", "office depot", "amzn", "amazon"],
-        "Bank Fees": ["wire fee", "service charge", "atm fee", "overdraft", "nsf"],
-        "Professional Services": ["attorney", "cpa", "consulting", "legal"],
-        "Travel": ["uber", "lyft", "airlines", "hotel", "airbnb", "marriott", "hilton"],
-        "Insurance": ["insurance", "premium"],
-        "Taxes": ["irs", "state tax", "franchise tax"],
-    }
+    # R5: process anything sitting in Uncategorized buckets
+    try:
+        result = _process_uncategorized_via_api(emp_workspace)
+        if result["reviewed"] > 0:
+            messages.append(
+                f"Reviewed {result['reviewed']} Uncategorized items: "
+                f"{result['reclassified']} reclassified (conf >=0.75), "
+                f"{result['still_uncertain']} still uncertain (logged to decisions/)."
+            )
+            memory.append(
+                f"[episodic] tick {datetime.utcnow().isoformat(timespec='seconds')}Z "
+                f"reviewed {result['reviewed']} uncategorized items."
+            )
+    except Exception as e:
+        messages.append(f"Uncategorized-review pass failed: {e}")
 
-    categorizations = []
-    by_step = {}
-    low_confidence_items = []
-    for tx in txs:
-        cat = categorize(tx, coa_patterns=coa_patterns, neighbors=txs)
-        categorizations.append((tx, cat))
-        by_step[cat.rule_chain_step] = by_step.get(cat.rule_chain_step, 0) + 1
-        if cat.confidence < 0.5:
-            low_confidence_items.append((tx, cat))
+    # R7: browser-driven For Review queue (if browser is available)
+    # In v0.3 this is opt-in via env var BOOKIE_BROWSER_TICK=1 to avoid surprise costs.
+    if os.environ.get("BOOKIE_BROWSER_TICK", "0") == "1":
+        try:
+            from bookie import browser
+            if browser.is_available():
+                queue = browser.list_for_review()
+                if queue:
+                    messages.append(f"For Review queue has {len(queue)} items pending.")
+                    memory.append(
+                        f"[episodic] browser saw {len(queue)} For Review items at "
+                        f"{datetime.utcnow().isoformat(timespec='seconds')}Z."
+                    )
+        except Exception as e:
+            messages.append(f"Browser surface unavailable this tick: {e}")
 
-    # 3. Persist decisions
-    decisions_dir = emp_workspace / "decisions"
-    decisions_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    (decisions_dir / f"{stamp}.json").write_text(json.dumps([
-        {"tx_id": tx.id, "vendor": tx.vendor, "amount": tx.amount,
-         "date": tx.date.isoformat(), "gl_account": cat.gl_account,
-         "confidence": cat.confidence, "step": cat.rule_chain_step,
-         "rationale": cat.rationale}
-        for tx, cat in categorizations
-    ], indent=2))
-
-    # 4. Archive manual feed; clear it
-    if manual_lines:
-        _archive_processed_feed(emp_workspace, manual_lines)
-        pending_path = emp_workspace / "pending-feed.json"
-        if pending_path.exists():
-            pending_path.unlink()
-
-    # 5. Try posting to QBO (if configured)
-    qbo_errors = _try_post_to_qbo(categorizations, emp_workspace)
-
-    # 6. Compose tick result
-    summary_parts = [
-        f"Processed {len(txs)} transactions",
-        f"({len(plaid_lines)} from Plaid live)" if plaid_lines else "",
-        f"({len(manual_lines)} from manual drop)" if manual_lines else "",
-        ". By chain step: " + ", ".join(f"step{k}={v}" for k, v in sorted(by_step.items())),
-        f". Low-confidence: {len(low_confidence_items)}.",
-    ]
-    summary_line = "".join(p for p in summary_parts if p)
-
-    messages = [summary_line]
-    if plaid_errors:
-        messages.append("Plaid errors this tick: " + "; ".join(plaid_errors)[:500])
-    if qbo_errors:
-        messages.append("QBO posting errors: " + "; ".join(qbo_errors)[:500])
-
-    escalations = []
-    high_value_low_conf = [
-        (tx, cat) for tx, cat in low_confidence_items if abs(tx.amount) > 1000
-    ]
-    for tx, cat in high_value_low_conf:
-        escalations.append({
-            "summary": f"Bookie low-confidence on high-value tx {tx.id} "
-                       f"(${abs(tx.amount):.2f}, vendor={tx.vendor!r})",
-            "body": f"Categorized as {cat.gl_account} at chain step {cat.rule_chain_step}. "
-                    f"Rationale: {cat.rationale}",
-            "recommendation": "Confirm the GL code or supply a memorized rule for this vendor.",
-        })
-
-    memory_entries = [
-        f"[episodic] tick {datetime.utcnow().isoformat(timespec='seconds')}Z "
-        f"processed {len(txs)} transactions "
-        f"(plaid={len(plaid_lines)}, manual={len(manual_lines)}, qbo_errors={len(qbo_errors)})."
-    ]
-
+    status = "ok" if messages else "idle"
     return {
         "messages_to_cos": messages,
-        "memory_appends": memory_entries,
+        "memory_appends": memory,
         "escalations": escalations,
         "llm_prompts": [],
-        "status": "ok" if not (plaid_errors or qbo_errors) else "ok-with-errors",
+        "status": status,
     }

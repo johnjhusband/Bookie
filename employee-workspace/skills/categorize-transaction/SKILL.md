@@ -54,4 +54,6 @@ Always returns a `Categorization`. Never returns None. Never raises.
 
 ## Calling site
 
-`bookie.tick()` calls this for every Transaction in `workspace/pending-feed.json`. Result is logged to `workspace/decisions/YYYYMMDD-HHMMSS.json` and (if posting to QBO) wrapped in `policy.guard()`.
+`bookie.tick()` calls this for every Transaction it pulls from QBO's Uncategorized buckets via the API (Purchases assigned to "Uncategorized Expense", "Uncategorized Income", "Ask My Accountant"). Result is logged to `workspace/decisions/YYYYMMDD-HHMMSS-*.json` and (when the live QBO update is wired) any reclassification is wrapped in OpenHarness `policy.guard()`.
+
+When the browser surface is active (BOOKIE_BROWSER_TICK=1 + Stagehand storage state present), Bookie also drives the QBO "For Review" queue and uses this same categorizer to pick the GL code for each line.

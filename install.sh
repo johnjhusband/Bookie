@@ -14,7 +14,7 @@ chmod +x bin/bookie scripts/*.sh
 
 echo "==> Ensuring ~/.config/bookie/ exists..."
 mkdir -p "${BOOKIE_CONFIG_ROOT:-$HOME/.config/bookie}"
-for f in qbo-credentials plaid-credentials plaid-items; do
+for f in qbo-credentials; do
   target="${BOOKIE_CONFIG_ROOT:-$HOME/.config/bookie}/${f}.json"
   if [ ! -f "$target" ]; then
     cp "config/${f}.template.json" "$target"

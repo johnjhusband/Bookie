@@ -1,4 +1,0 @@
-{
-  "_comment": "Per-bank Plaid access tokens. Populated by completing Plaid Link OAuth (via scripts/plaid-link.sh). Each item is one connected bank.",
-  "items": []
-}

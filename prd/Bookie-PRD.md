@@ -1,16 +1,21 @@
 # Bookie — Product Requirements Document
 
-**Version:** 0.2 (scope-corrected)
-**Author:** Chief of Staff (Claude Code), 2026-05-27
-**Status:** Draft
+**Version:** 0.3 (post re-research)
+**Author:** Chief of Staff (Claude Code), 2026-05-28
+**Status:** Replaces v0.2 entirely.
+
+This PRD is the implementation lens. The source-of-truth for what Bookie does is `prd/requirements.md` — every line there traces to John's words or a cited integration contract. This PRD describes how those requirements map to code.
 
 ---
 
 ## 1. What Bookie is
 
-Bookie is an autonomous AI bookkeeper for John Husband's businesses. The first AI employee in John's AI organization, running inside the OpenHarness runtime under Chief of Staff supervision.
+Bookie is an autonomous AI bookkeeper for John and Tara Husband, dba Husband.LLC (Florida, Form 1065 partnership, cash basis). Bookie runs inside OpenHarness under Chief of Staff supervision and operates the QuickBooks Online tenant via two surfaces:
 
-Bookie's job: keep John's books current and accurate while requiring near-zero interruption of John's time.
+- **REST API** for what QBO exposes programmatically (CoA, vendors, posted transactions, JournalEntry posts, reports, Attachable, RecurringTransaction reads).
+- **Browser automation** for the 7 documented API gaps (For Review queue, Bank Rules CRUD, Reconcile workflow, Receipt inbox match, Audit Log, force-match, RecurringTransaction writes).
+
+John's words (2026-05-28): *"the AI should also be able to interact with the software graphically like a human... I want the full experience. If the API can't do something I want to have the graphic interface already built and working."*
 
 ## 2. Reporting structure
 
@@ -22,131 +27,109 @@ Chief of Staff (Claude Code in OpenHarness)
 Bookie
 ```
 
-Bookie never contacts John directly. Bookie writes to `inbox/bookie.md`; Chief of Staff handles or routes.
+Bookie never contacts John. Writes to `inbox/bookie.md`; Chief of Staff handles or routes.
 
-## 3. Scope
+## 3. Scope (traceable)
 
-- Transaction categorization
-- Bank reconciliation
-- AR / AP cadence
-- Sales tax tracking
-- 1099-NEC tracking
-- Month-end close
-- CPA year-end package
+See `prd/requirements.md` for the full requirement set with sources. In summary:
 
-## 4. The decision rule
+- **R1.** Categorize every QBO transaction
+- **R2.** Six-step decision chain (memorized → context → temporal → historical → default → escalate)
+- **R3.** Inspection-on-connect: pull CoA + vendors + posted-txn history + recurring on first credential availability
+- **R4.** CPA report pack (cash basis, with comparatives)
+- **R5.** Monthly pre-handoff cleanup (zero out Uncategorized buckets, reclassify owner draws, reconcile, etc.)
+- **R6.** Form 1065 CoA structure (per-partner equity accounts for John and Tara)
+- **R7.** Browser automation for the 7 documented API gaps
+- **R8.** Two-surface decision logic (API where it works, browser where it must)
+- **R9.** Cash-basis-specific posture (Purchase over Bill, no depreciation booking)
+- **R10.** Domain-specific categorization patterns (home office, vehicle, draws, mixed personal/business, estimateds)
+- **R11.** Annual 1099-NEC packet (opportunistic; $2,000 threshold; only if vendors cross)
+- **R12.** Daily/weekly/monthly/quarterly/annual reporting cadence to CoS
+- **R13.** Banned features (Plaid, sandbox, sales tax tracking, AR/AP cadence as a subsystem, depreciation booking, etc.)
+- **R14.** John's real-world prereqs (Intuit dev account, Bookie bot Intuit user, one-time MFA)
+- **R15.** Success criteria
 
-**Auto-categorize every transaction. Don't ask John.**
+## 4. Architecture
 
-For every incoming transaction, run this chain in order:
+### 4.1 Two surfaces
 
-1. **QuickBooks Memorized Transactions** — if QBO has a memorized rule matching vendor/amount/pattern, use it.
-2. **Transaction context** — vendor name, memo, amount against the Chart of Accounts.
-3. **Temporal context** — surrounding transactions for relationships (transfer-pairs, expense+reimbursement, recurring bills on schedule).
-4. **Historical similarity** — search prior categorizations for the same vendor or similar pattern.
-5. **Default categorization** — even when nothing matches confidently, post a best-guess GL code (e.g., "Uncategorized Expense") with a `bookie-confidence=low` tag.
-6. **Ask Chief of Staff** — only when the chain truly cannot produce an answer.
+The split is documented per requirement R8. The daemon picks API or browser per task; the split is not configurable per call.
 
-**Bookie does not maintain a "transactions awaiting John's approval" queue.** Categorization happens by default. The low-confidence items land in a log John can browse if he chooses.
+**API surface** (`bookie.qbo`):
+- `load_config`, `save_config`, `refresh_access_token`
+- `fetch_chart_of_accounts`, `fetch_vendors`, `fetch_memorized_transactions`
+- `post_journal_entry`, `update_entity`
+- (Future) `fetch_posted_transactions`, `fetch_reports`, `upload_attachable`
 
-## 5. Agent topology
+**Browser surface** (`bookie.browser`):
+- `list_for_review`, `categorize_for_review_item`, `force_match`
+- `list_bank_rules`, `create_bank_rule`
+- `reconcile_account`
+- `attach_and_match_receipt`
+- `read_audit_log`
+- `is_available()` — returns True only if Stagehand is importable AND a persisted storage state exists
 
-Supervisor + narrow specialists:
+Browser uses Stagehand for AI-prompted actions (selectors are unstable per QBO research). Local Chromium by default; Browserbase opt-in via `BOOKIE_USE_BROWSERBASE=1`.
 
-- **Supervisor** — decomposes work and dispatches.
-- **`categorizer`** — runs the decision chain on each transaction.
-- **`reconciler`** — matches bank-feed transactions to ledger entries.
-- **`journal-writer`** — drafts and posts month-end accruals, prepaids, depreciation.
-- **`reporter`** — produces trial balance, P&L, balance sheet, sales-tax drafts, year-end CPA packet.
+### 4.2 The categorizer
 
-Pattern: plan → tool → verify → commit. Bounded execution, no ReAct loops.
+`bookie.categorizer.categorize()` — pure function, no I/O, always returns a `Categorization` per requirements.md R2. Six-step chain; step 5 always succeeds; step 6 escalation is the unreachable-in-practice safety hatch.
 
-## 6. Integrations
+### 4.3 The tick
 
-- **QuickBooks Online** via REST v3 + OAuth 2.0.
-  - Idempotency via `Request-Id` header.
-  - Optimistic concurrency via `SyncToken`.
-  - SDK: `python-quickbooks` + `intuit-oauth`.
-- **Plaid** for bank feeds (OAuth-only banks).
-- **OpenHarness state** (`state/chat.db`) — every Bookie action logged.
-
-## 7. Workspace (under OpenHarness)
-
-Bookie's running workspace lives at `~/.openharness/employees/bookie/`:
-
-```
-employees/bookie/
-  SOUL.md
-  USER.md
-  MEMORY.md            # vendor rules, CoA, prior categorizations
-  AGENTS.md
-  HEARTBEAT.md
-  STYLE.md
-  TOOLS.md
-  messages-to-cos.md   # alias for ~/.openharness/inbox/bookie.md
-  workspace/
-    decisions/         # categorization decisions
-    drafts/            # in-progress reports
-    reports/           # close packages, year-end packets
-```
-
-The Bookie repo holds source code, install scripts, and design docs. The OpenHarness employee folder holds Bookie's running state. `install.sh` syncs the canonical workspace files from `employee-workspace/` in the repo into the OpenHarness folder.
-
-## 8. Heartbeat schedule
+`bookie.tick(context)` is the OpenHarness daemon entrypoint. Flow:
 
 ```
-Every bank-feed sync (event-driven)
-  Categorize every new transaction per the decision chain
-  Write the entry to QBO
-  Update MEMORY.md with new vendor patterns
-
-Daily 06:00 local
-  Pull bank feeds via Plaid
-  Run reconciliation pass
-  Report to messages-to-cos.md only if there's something to say
-
-Monthly day 1
-  Run month-end close on the prior month
-  Post journal entries, produce trial balance and P&L
-  Notify CoS that close is ready
-
-Annual January
-  Generate 1099-NEC packet
-  Notify CoS
-
-Annual February
-  Generate CPA year-end package
-  Notify CoS
+if no QBO credentials yet → status: idle-no-qbo-creds
+if not yet inspected → run R3 first-inspection; report findings; status: first-inspection-complete
+else:
+    process_uncategorized_via_api()      # R5 reclassification of Uncategorized buckets
+    if BOOKIE_BROWSER_TICK=1 and browser.is_available():
+        list_for_review() and report queue size
+return tick result for OpenHarness daemon
 ```
 
-## 9. Phasing
+### 4.4 OpenHarness integration
 
-**Phase 1 (this build):**
-- Bookie workspace scaffold under OpenHarness employees/
-- Python: `categorizer.py` (decision chain), `models.py`, `qbo.py` (stub), `plaid_feed.py` (file-based for testing), `cli.py`
-- Unit tests for the categorizer
+Bookie remains a workspace folder under `OpenHarness/employees/bookie/`. The daemon imports `bookie` and calls `bookie.tick(context)`. Every QBO write Bookie makes is wrapped in `openharness.policy.guard()`.
 
-**Phase 2:**
-- QBO wired live with OAuth
-- Plaid wired live for John's bank accounts
-- First production transactions flowing
+### 4.5 Hard stops (browser side)
 
-**Phase 3:**
-- Month-end close workflow live
-- Sales tax draft generation
-- 1099 packet generation
-- CPA year-end package
+Per `lessons/browser-automation-escalation-ladder.md`:
+- 5 min wall clock per browser task
+- 50 LLM calls per task
+- $2 cost ceiling per task
+- 10 attempts per site per day
 
-## 10. Success criteria
+Enforced in `bookie.browser.TaskBudget`.
 
-- **S1.** Every incoming transaction is categorized. John is never asked.
-- **S2.** Reconciliation runs clean — bank feed matches ledger.
-- **S3.** Month-end close produces a complete package.
-- **S4.** Bookie reports to Chief of Staff, never to John. Zero notifications to John's phone.
+## 5. State + audit trail
 
-## 11. References
+Per-tick artifacts persist under `OpenHarness/employees/bookie/workspace/`:
 
-- Bookie design synthesis: `lessons/Bookie-design-research-synthesis.md`
+- `inspection/` — R3 raw QBO snapshots (coa.json, vendors.json, recurring.json)
+- `decisions/YYYYMMDD-HHMMSS-*.json` — every categorization decision with rationale
+- `posted/<tx_id>.json` — every QBO write that landed
+- `reports/YYYY-MM-*.md` — monthly + annual CPA package outputs
+- `state/first-inspection.json` — marker file so R3 only fires once
+
+OpenHarness chat.db logs every Bookie action with the `kind` taxonomy already in place (`tick`, `event`, `escalation`, `inbox`, etc.). 7-year retention per OpenHarness PRD §12.
+
+## 6. Phasing
+
+- **Phase 1 (done):** QBO API client (live, real REST v3 + OAuth refresh). Categorization decision chain (9 tests passing). Bookie workspace files real. Bookie.tick() restructured for QBO-only flow.
+- **Phase 2 (this build):** Inspection-on-connect (R3). Uncategorized-bucket reclassification (R5 minimal). Browser scaffolding (`bookie.browser`).
+- **Phase 3:** Live QBO write of the reclassification (currently logs the recommendation; needs the API update call). First end-to-end browser pass against your sandbox QBO. Monthly cleanup checklist via browser + API.
+- **Phase 4:** Full report-pack production. 1099 packet generation. Browser-driven Reconciliation workflow.
+
+## 7. References
+
+- Requirements: `prd/requirements.md` (canonical, traceable)
+- Research streams used to build the requirements:
+  - QBO API surface — verified by research agent against Intuit docs, May 2026
+  - QBO banking pipeline — verified by research agent
+  - CPA hand-off package — verified against AICPA + IRS sources
+  - Browser automation viability — verified including Akamai defense, TOS posture, Stagehand viability
 - CTO postmortem: `lessons/CTO-postmortem-for-Bookie.md`
-- Raw research: `research/01-quickbooks-api.md` through `research/05-compliance-security.md`
+- Browser escalation ladder: `lessons/browser-automation-escalation-ladder.md`
 - OpenHarness PRD: `https://github.com/johnjhusband/OpenHarness/blob/master/prd/OpenHarness-PRD.md`

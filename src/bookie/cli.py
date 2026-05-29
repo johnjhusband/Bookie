@@ -1,7 +1,7 @@
-"""bookie CLI — run a categorization pass on a JSON file of transactions.
+"""bookie CLI — categorize transactions from a JSON file or run self-check.
 
 Usage:
-    bookie categorize --feed <path.json> [--out <path.json>] [--dry-run]
+    bookie categorize --feed <path.json> [--out <path.json>]
     bookie self-check
 """
 from __future__ import annotations
@@ -9,11 +9,28 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 from bookie import categorizer
 from bookie.models import MemorizedRule, Transaction
-from bookie.plaid_feed import fetch_transactions_from_file
+
+
+def _load_transactions_from_file(path: Path) -> list[Transaction]:
+    """Read a JSON file of {id, date, amount, vendor, memo, account} dicts."""
+    data = json.loads(path.read_text())
+    out = []
+    for r in data:
+        out.append(Transaction(
+            id=r["id"],
+            date=date.fromisoformat(r["date"]),
+            amount=float(r["amount"]),
+            vendor=r.get("vendor", ""),
+            memo=r.get("memo", ""),
+            account=r.get("account", ""),
+            raw=r,
+        ))
+    return out
 
 
 # Minimal seed Chart of Accounts patterns for v1 demo. Real CoA loaded from QBO in Phase 2.
@@ -32,7 +49,7 @@ def _cmd_categorize(args):
     if not feed_path.exists():
         print(f"error: feed file not found: {feed_path}", file=sys.stderr)
         sys.exit(2)
-    txs = fetch_transactions_from_file(feed_path)
+    txs = _load_transactions_from_file(feed_path)
     print(f"Loaded {len(txs)} transactions from {feed_path}")
 
     results = []
