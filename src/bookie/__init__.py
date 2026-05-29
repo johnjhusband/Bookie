@@ -126,15 +126,48 @@ def _format_inspection_message(summary: dict) -> str:
     return "\n".join(lines)
 
 
+def _try_openharness_memory():
+    """Returns openharness.memory if importable, else None.
+    Lets Bookie use OpenHarness's memory tool when running inside the daemon,
+    and degrade gracefully when run standalone (e.g., bookie self-check)."""
+    try:
+        from openharness import memory as oh_memory
+        return oh_memory
+    except Exception:
+        return None
+
+
+def _try_openharness_skills():
+    """Returns openharness.skills.run if importable, else None.
+    Lets Bookie invoke categorization via the skill dispatch when available
+    so the SKILL.md contract is exercised; falls back to direct import."""
+    try:
+        from openharness import skills as oh_skills
+        return oh_skills
+    except Exception:
+        return None
+
+
 def _process_uncategorized_via_api(emp_workspace: Path) -> dict:
     """R5: reclassify items sitting in Uncategorized/Ask-My-Accountant buckets.
 
-    v0.3 minimal implementation: list the candidates, categorize via the chain,
-    persist decisions. Live QBO write of the reclassification is the next milestone.
+    Uses openharness.skills.run('categorize-transaction') when running inside
+    the daemon (proves the SKILL.md contract), falls back to direct import.
     """
-    from bookie.categorizer import categorize
+    from bookie.categorizer import categorize as direct_categorize
     from bookie.models import Transaction
     from bookie.qbo import load_config, _api_call  # private helper for queries
+
+    skills_mod = _try_openharness_skills()
+
+    def categorize(tx, **kwargs):
+        if skills_mod is not None:
+            try:
+                return skills_mod.run("categorize-transaction", runtime_key="bookie",
+                                       tx=tx, **kwargs)
+            except Exception:
+                pass
+        return direct_categorize(tx, **kwargs)
 
     cfg = load_config(_qbo_creds_path())
     creds_path = _qbo_creds_path()
@@ -204,19 +237,74 @@ def _process_uncategorized_via_api(emp_workspace: Path) -> dict:
     }
 
 
+def _detect_bank_rule_candidates(emp_workspace: Path) -> list[dict]:
+    """Look at recent decisions/ files for vendors that hit step 5 (low-conf default)
+    3+ times. Those are candidates for proposing a Bookie-learned rule or a QBO
+    Bank Rule via browser. Returns list of suggestions.
+    """
+    decisions_dir = emp_workspace / "decisions"
+    if not decisions_dir.exists():
+        return []
+    vendor_step5_counts: dict[str, list[dict]] = {}
+    # Look at the last 30 decision files
+    files = sorted(decisions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)[-30:]
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            if not isinstance(data, list):
+                continue
+            for d in data:
+                if d.get("step") == 5 and d.get("vendor"):
+                    v = d["vendor"]
+                    vendor_step5_counts.setdefault(v, []).append(d)
+        except Exception:
+            continue
+    suggestions = []
+    for vendor, hits in vendor_step5_counts.items():
+        if len(hits) >= 3:
+            # The most common GL among the defaults
+            gl_counts: dict[str, int] = {}
+            for h in hits:
+                gl = h.get("gl_account", "")
+                gl_counts[gl] = gl_counts.get(gl, 0) + 1
+            winner = max(gl_counts, key=gl_counts.get)
+            suggestions.append({
+                "vendor": vendor,
+                "count": len(hits),
+                "proposed_gl": winner,
+                "rationale": f"vendor {vendor!r} categorized at step 5 (default) "
+                             f"{len(hits)} times in recent decisions; "
+                             f"most common GL was {winner}",
+            })
+    return suggestions
+
+
 def tick(context: dict) -> dict:
     """OpenHarness daemon entrypoint. See module docstring for the flow."""
     emp_workspace = Path(context["path"]) / "workspace"
     emp_workspace.mkdir(parents=True, exist_ok=True)
 
+    oh_memory = _try_openharness_memory()
+    employee_name = context.get("name", "bookie")
+
     messages: list[str] = []
-    memory: list[str] = []
+    memory_appends: list[str] = []
     escalations: list[dict] = []
+
+    def remember(content: str, *, layer: str = "episodic", tag: str | None = None):
+        """Write to MEMORY.md via OpenHarness memory tool when available, else queue."""
+        if oh_memory is not None:
+            try:
+                oh_memory.add(employee_name, content, layer=layer, tag=tag)
+                return
+            except Exception:
+                pass
+        memory_appends.append(f"[{layer}]{' ['+tag+']' if tag else ''} {content}")
 
     if not _has_qbo_creds():
         return {
             "messages_to_cos": [],
-            "memory_appends": [],
+            "memory_appends": memory_appends,
             "escalations": [],
             "llm_prompts": [],
             "status": "idle-no-qbo-creds",
@@ -228,17 +316,17 @@ def tick(context: dict) -> dict:
             summary = _do_first_inspection(emp_workspace)
             _mark_inspected(emp_workspace, summary)
             messages.append(_format_inspection_message(summary))
-            memory.append(
-                f"[episodic] first QBO inspection completed "
+            remember(
+                f"First QBO inspection completed "
                 f"{datetime.utcnow().isoformat(timespec='seconds')}Z. "
                 f"Found {summary.get('coa_account_count', '?')} accounts, "
                 f"{summary.get('vendor_count', '?')} vendors, "
-                f"{summary.get('recurring_template_count', '?')} recurring templates."
+                f"{summary.get('recurring_template_count', '?')} recurring templates.",
+                layer="episodic", tag="first-inspection",
             )
-            # First-inspection tick stops here; subsequent ticks do regular work
             return {
                 "messages_to_cos": messages,
-                "memory_appends": memory,
+                "memory_appends": memory_appends,
                 "escalations": escalations,
                 "llm_prompts": [],
                 "status": "first-inspection-complete",
@@ -248,7 +336,7 @@ def tick(context: dict) -> dict:
                 "messages_to_cos": [
                     f"Bookie first-inspection FAILED: {e}\n{traceback.format_exc(limit=2)}"
                 ],
-                "memory_appends": [],
+                "memory_appends": memory_appends,
                 "escalations": [],
                 "llm_prompts": [],
                 "status": "first-inspection-failed",
@@ -263,15 +351,33 @@ def tick(context: dict) -> dict:
                 f"{result['reclassified']} reclassified (conf >=0.75), "
                 f"{result['still_uncertain']} still uncertain (logged to decisions/)."
             )
-            memory.append(
-                f"[episodic] tick {datetime.utcnow().isoformat(timespec='seconds')}Z "
-                f"reviewed {result['reviewed']} uncategorized items."
+            remember(
+                f"tick {datetime.utcnow().isoformat(timespec='seconds')}Z "
+                f"reviewed {result['reviewed']} uncategorized items "
+                f"({result['reclassified']} confident, "
+                f"{result['still_uncertain']} uncertain).",
+                layer="episodic", tag="tick",
             )
     except Exception as e:
         messages.append(f"Uncategorized-review pass failed: {e}")
 
+    # Self-improvement signal: detect vendors that keep hitting the step-5 default
+    suggestions = _detect_bank_rule_candidates(emp_workspace)
+    for s in suggestions:
+        remember(
+            f"[skill-candidate] Vendor {s['vendor']!r} has fallen to step-5 default "
+            f"{s['count']} times. Propose: create a QBO Bank Rule (or Bookie-learned rule) "
+            f"mapping this vendor to {s['proposed_gl']!r}.",
+            layer="procedural", tag="bank-rule-candidate",
+        )
+        escalations.append({
+            "summary": f"Bank Rule proposal: {s['vendor']!r} → {s['proposed_gl']!r}",
+            "body": s["rationale"],
+            "recommendation": "Authorize Bookie to create the Bank Rule via the browser surface "
+                              "next maintenance window, or veto if the GL is wrong.",
+        })
+
     # R7: browser-driven For Review queue (if browser is available)
-    # In v0.3 this is opt-in via env var BOOKIE_BROWSER_TICK=1 to avoid surprise costs.
     if os.environ.get("BOOKIE_BROWSER_TICK", "0") == "1":
         try:
             from bookie import browser
@@ -279,9 +385,10 @@ def tick(context: dict) -> dict:
                 queue = browser.list_for_review()
                 if queue:
                     messages.append(f"For Review queue has {len(queue)} items pending.")
-                    memory.append(
-                        f"[episodic] browser saw {len(queue)} For Review items at "
-                        f"{datetime.utcnow().isoformat(timespec='seconds')}Z."
+                    remember(
+                        f"browser saw {len(queue)} For Review items at "
+                        f"{datetime.utcnow().isoformat(timespec='seconds')}Z.",
+                        layer="episodic", tag="for-review-queue",
                     )
         except Exception as e:
             messages.append(f"Browser surface unavailable this tick: {e}")
@@ -289,7 +396,7 @@ def tick(context: dict) -> dict:
     status = "ok" if messages else "idle"
     return {
         "messages_to_cos": messages,
-        "memory_appends": memory,
+        "memory_appends": memory_appends,
         "escalations": escalations,
         "llm_prompts": [],
         "status": status,
