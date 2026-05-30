@@ -236,6 +236,76 @@ def fetch_vendors(cfg: QBOConfig, creds_path: Path) -> list[dict]:
     } for v in items]
 
 
+def build_purchase_reclassify_body(purchase: dict, *, line_id: str,
+                                   new_account_id: str,
+                                   new_account_name: str = "") -> dict:
+    """Pure function: given a fetched Purchase entity, build the sparse-update body
+    that reclassifies one expense line to a new account.
+
+    CRITICAL (per Intuit): the Line array is NOT sparse-merged — we must send
+    the FULL Line array (every line with its Id), or omitted lines get deleted.
+    We copy all lines and swap AccountRef only on the target line.
+    """
+    lines_out = []
+    for line in purchase.get("Line", []):
+        new_line = dict(line)  # shallow copy
+        if str(line.get("Id")) == str(line_id):
+            detail = dict(line.get("AccountBasedExpenseLineDetail", {}))
+            ref = dict(detail.get("AccountRef", {}))
+            ref["value"] = new_account_id
+            if new_account_name:
+                ref["name"] = new_account_name
+            detail["AccountRef"] = ref
+            new_line["AccountBasedExpenseLineDetail"] = detail
+        lines_out.append(new_line)
+    return {
+        "sparse": True,
+        "Id": purchase["Id"],
+        "SyncToken": purchase["SyncToken"],
+        "Line": lines_out,
+    }
+
+
+def reclassify_purchase(cfg: QBOConfig, creds_path: Path, *, purchase_id: str,
+                        line_id: str, new_account_id: str,
+                        new_account_name: str = "",
+                        _api=None, max_retries: int = 2) -> QBOResult:
+    """Read a Purchase, swap one line's expense account, sparse-update it.
+
+    Handles the 5010 stale-object error by re-reading and re-applying. `_api`
+    is injectable for testing (defaults to the live _api_call).
+    """
+    api = _api or (lambda method, path, **kw: _api_call(cfg, creds_path, method, path, **kw))
+    rid = _new_request_id()
+    attempt = 0
+    last_error = None
+    while attempt <= max_retries:
+        attempt += 1
+        # 1. Read current entity for fresh SyncToken
+        try:
+            read = api("GET", f"/purchase/{purchase_id}")
+        except QBOError as e:
+            return QBOResult(ok=False, request_id=rid, payload={}, error=f"read failed: {e}")
+        purchase = read.get("Purchase") or read.get("QueryResponse", {}).get("Purchase", [{}])[0]
+        if not purchase:
+            return QBOResult(ok=False, request_id=rid, payload={}, error="purchase not found")
+        body = build_purchase_reclassify_body(
+            purchase, line_id=line_id, new_account_id=new_account_id,
+            new_account_name=new_account_name)
+        # 2. Update
+        try:
+            resp = api("POST", "/purchase", body=body, request_id=rid)
+            return QBOResult(ok=True, request_id=rid, payload=body, response=resp)
+        except QBOError as e:
+            msg = str(e)
+            last_error = msg
+            # 5010 stale object → re-read and retry
+            if "5010" in msg or "Stale" in msg:
+                continue
+            return QBOResult(ok=False, request_id=rid, payload=body, error=msg)
+    return QBOResult(ok=False, request_id=rid, payload={}, error=f"stale-token retries exhausted: {last_error}")
+
+
 def update_entity(cfg: QBOConfig, creds_path: Path, entity_type: str,
                   entity: dict, *, request_id: str | None = None) -> QBOResult:
     """Update with SyncToken for optimistic concurrency. `entity` must include Id and SyncToken."""
