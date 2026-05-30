@@ -7,7 +7,7 @@
 ## Who does what
 
 - **You (John) — actionable now:** Step 4
-- **Claude — does these (some blocked until you finish your steps):** Step 9, Step 10, Step 11, Step 12, Step 13, Step 14, Step 15
+- **Claude — does these (some blocked until you finish your steps):** Step 9, Step 10, Step 11
 - **Deferred (not needed for first light):** Step 6, Step 7, Step 8
 
 ## Steps
@@ -32,7 +32,22 @@ Client ID + Secret from Keys & Credentials > Development saved to /home/john/.co
 
 ### Step 4 — Add the Development redirect URI (Keys & credentials page)  [JOHN DOES THIS] TODO
 
-IMPORTANT: do NOT use the Settings > Redirect URIs tab — that one is Production-only and stays locked behind app assessment (that's the production-key message you saw). The Development redirect URI lives elsewhere and needs no approval. Steps: (1) My Hub > Workspaces > your workspace > Bookie app. (2) Left nav: expand DEVELOPMENT SETTINGS (not Production Settings). (3) Click Keys & credentials. (4) You'll see Client ID + Client Secret; scroll down to the Redirect URIs section on that same page. (5) Click Add URI. (6) Type http://localhost:8910/qbo-callback (no trailing slash). (7) Save. (8) If a Reconnect URL field on that page blocks Save, put https://example.com/reconnect in it and Save again. ~1-2 minutes. Verified against current Intuit docs May 2026.
+COMPLETE STEPS (start to finish, assume nothing):
+1. Open a web browser.
+2. Go to this URL: https://developer.intuit.com
+3. Top-right, click 'Sign In' and sign in with john@husband.llc (the account you made the app under).
+4. After signing in, top-right click 'My Hub'.
+5. In the My Hub menu click 'Workspaces'.
+6. Click your workspace (named 'Bookie').
+7. Click your app card (named 'Bookie', AppID starts bb87a65f).
+8. You're now on the app. In the LEFT sidebar find the 'Development Settings' group (NOT 'Production Settings'). If it's collapsed, click it to expand.
+9. Under Development Settings, click 'Keys & credentials'.
+10. On that page you'll see your Client ID and Client Secret near the top. Scroll DOWN on the same page to a section titled 'Redirect URIs'.
+11. Click the 'Add URI' button (or the '+' next to Redirect URIs).
+12. In the text box type exactly:  http://localhost:8910/qbo-callback   (all lowercase, no spaces, no slash at the end).
+13. Click 'Save'. You should see the URI now listed under Redirect URIs.
+14. If a 'Reconnect URL' field on the page won't let you Save without a value, type  https://example.com/reconnect  in it and click Save again.
+DO NOT use the 'Settings > Redirect URIs' tab — that one is for Production and stays locked (it shows a 'production key requirement' message). The Development one above needs no approval. Verified against current Intuit docs, May 2026.
 
 *Why this is yours and not automatable:* Requires John logged into his Intuit dashboard
 
@@ -68,18 +83,22 @@ I run: bash /home/john/repos/OpenHarness/deploy/ship-credentials.sh
 
 I run the pull and read inbox/bookie.md to confirm the first-inspection summary landed.
 
-### Step 12 — Build QBO report-pack generation (P&L, Balance Sheet, GL, Trial Balance)  [CLAUDE DOES THIS] TODO
+### Step 12 — Build QBO report-pack generation (P&L, Balance Sheet, GL, Trial Balance)  [CLAUDE DOES THIS] ✓ DONE
 
 Research current QBO report API response shapes (never guess), then build bookie/reports.py producing cash-basis P&L, Balance Sheet, General Ledger, Trial Balance for a date range. Tests against captured/mocked QBO JSON. Ready the instant creds land.
 
-### Step 13 — Build Form-1065 Chart-of-Accounts categorization patterns  [CLAUDE DOES THIS] TODO
+### Step 13 — Build Form-1065 Chart-of-Accounts categorization patterns  [CLAUDE DOES THIS] ✓ DONE
 
 Encode the husband-wife LLC / Form-1065 CoA (per-partner equity, draws, contributions; Schedule-C-aligned expense lines) into the categorizer's pattern tables, plus the domain patterns (home office, vehicle, owner draws, mixed personal/business, estimated taxes). Tests.
 
-### Step 14 — Build the QBO Uncategorized-reclassification pipeline (live write)  [CLAUDE DOES THIS] TODO
+### Step 14 — Build the QBO Uncategorized-reclassification pipeline (live write)  [CLAUDE DOES THIS] ✓ DONE
 
 Research the QBO Purchase/JournalEntry update shape (SyncToken, sparse update), then implement the live reclassification that today only logs a recommendation — wrapped in policy.guard. Tests against mocked QBO responses. Ready the instant creds land.
 
-### Step 15 — Build the monthly CPA-handoff cleanup checklist logic  [CLAUDE DOES THIS] TODO _(blocked until Step 12, 13 done)_
+### Step 15 — Build the monthly CPA-handoff cleanup checklist logic  [CLAUDE DOES THIS] ✓ DONE
 
 Implement the monthly cleanup pass (zero out Uncategorized/Ask-My-Accountant, reclassify owner draws to equity, flag personal-in-business, loan interest/principal split, CC-payment netting, 1099 vendor scan) producing a CPA-ready report. Tests.
+
+### Step 16 — Write tests for the browser-automation surface (mocked Stagehand)  [CLAUDE DOES THIS] ✓ DONE
+
+Add tests/test_browser.py exercising TaskBudget hard-stop caps, config loading, is_available() with mocked Stagehand. Behavioral, no live browser. Closes the feature-module coverage gap the goal criterion flags.
