@@ -151,7 +151,7 @@
       "id": "15",
       "title": "Build the monthly CPA-handoff cleanup checklist logic",
       "owner": "claude",
-      "status": "todo",
+      "status": "done",
       "blocked_on": [
         "12",
         "13"
