@@ -7,7 +7,7 @@
 ## Who does what
 
 - **You (John) — actionable now:** Step 4
-- **Claude — does these (some blocked until you finish your steps):** Step 9, Step 10, Step 11
+- **Claude — does these (some blocked until you finish your steps):** Step 9, Step 10, Step 11, Step 12, Step 13, Step 14, Step 15
 - **Deferred (not needed for first light):** Step 6, Step 7, Step 8
 
 ## Steps
@@ -67,3 +67,19 @@ I run: bash /home/john/repos/OpenHarness/deploy/ship-credentials.sh
 ### Step 11 — Watch Bookie's first inspection tick  [CLAUDE DOES THIS] TODO _(blocked until Step 10 done)_
 
 I run the pull and read inbox/bookie.md to confirm the first-inspection summary landed.
+
+### Step 12 — Build QBO report-pack generation (P&L, Balance Sheet, GL, Trial Balance)  [CLAUDE DOES THIS] TODO
+
+Research current QBO report API response shapes (never guess), then build bookie/reports.py producing cash-basis P&L, Balance Sheet, General Ledger, Trial Balance for a date range. Tests against captured/mocked QBO JSON. Ready the instant creds land.
+
+### Step 13 — Build Form-1065 Chart-of-Accounts categorization patterns  [CLAUDE DOES THIS] TODO
+
+Encode the husband-wife LLC / Form-1065 CoA (per-partner equity, draws, contributions; Schedule-C-aligned expense lines) into the categorizer's pattern tables, plus the domain patterns (home office, vehicle, owner draws, mixed personal/business, estimated taxes). Tests.
+
+### Step 14 — Build the QBO Uncategorized-reclassification pipeline (live write)  [CLAUDE DOES THIS] TODO
+
+Research the QBO Purchase/JournalEntry update shape (SyncToken, sparse update), then implement the live reclassification that today only logs a recommendation — wrapped in policy.guard. Tests against mocked QBO responses. Ready the instant creds land.
+
+### Step 15 — Build the monthly CPA-handoff cleanup checklist logic  [CLAUDE DOES THIS] TODO _(blocked until Step 12, 13 done)_
+
+Implement the monthly cleanup pass (zero out Uncategorized/Ask-My-Accountant, reclassify owner draws to equity, flag personal-in-business, loan interest/principal split, CC-payment netting, 1099 vendor scan) producing a CPA-ready report. Tests.

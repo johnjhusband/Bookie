@@ -119,6 +119,45 @@
       ],
       "why_owner": "Pure commands \u2014 pull + read inbox. Mine.",
       "detail": "I run the pull and read inbox/bookie.md to confirm the first-inspection summary landed."
+    },
+    {
+      "id": "12",
+      "title": "Build QBO report-pack generation (P&L, Balance Sheet, GL, Trial Balance)",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [],
+      "why_owner": "Pure build work, no QBO connection needed \u2014 code + tests against mocked QBO report responses. Mine.",
+      "detail": "Research current QBO report API response shapes (never guess), then build bookie/reports.py producing cash-basis P&L, Balance Sheet, General Ledger, Trial Balance for a date range. Tests against captured/mocked QBO JSON. Ready the instant creds land."
+    },
+    {
+      "id": "13",
+      "title": "Build Form-1065 Chart-of-Accounts categorization patterns",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [],
+      "why_owner": "Pure build work. Mine.",
+      "detail": "Encode the husband-wife LLC / Form-1065 CoA (per-partner equity, draws, contributions; Schedule-C-aligned expense lines) into the categorizer's pattern tables, plus the domain patterns (home office, vehicle, owner draws, mixed personal/business, estimated taxes). Tests."
+    },
+    {
+      "id": "14",
+      "title": "Build the QBO Uncategorized-reclassification pipeline (live write)",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [],
+      "why_owner": "Pure build work, testable against mocked QBO. Mine.",
+      "detail": "Research the QBO Purchase/JournalEntry update shape (SyncToken, sparse update), then implement the live reclassification that today only logs a recommendation \u2014 wrapped in policy.guard. Tests against mocked QBO responses. Ready the instant creds land."
+    },
+    {
+      "id": "15",
+      "title": "Build the monthly CPA-handoff cleanup checklist logic",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [
+        "12",
+        "13"
+      ],
+      "why_owner": "Pure build work. Mine.",
+      "detail": "Implement the monthly cleanup pass (zero out Uncategorized/Ask-My-Accountant, reclassify owner draws to equity, flag personal-in-business, loan interest/principal split, CC-payment netting, 1099 vendor scan) producing a CPA-ready report. Tests."
     }
   ]
 }
