@@ -1,75 +1,123 @@
 {
-  "_comment": "Single source of truth for the Bookie setup steps. SETUP.md and the emailed checklist render FROM this file so they can't drift. Each step has an owner: 'claude' (I do it), 'john' (only he can — auth/MFA/legal/account-creation/physical), or 'deferred' (not needed for first light). blocked_on lists step ids that must be done first. The harness goal verify turns RED if any claude-owned, unblocked step is left incomplete — which structurally forces me to do my own work instead of leaving it assigned to John.",
+  "_comment": "Single source of truth for the Bookie setup steps. SETUP.md and the emailed checklist render FROM this file so they can't drift. Each step has an owner: 'claude' (I do it), 'john' (only he can \u2014 auth/MFA/legal/account-creation/physical), or 'deferred' (not needed for first light). blocked_on lists step ids that must be done first. The harness goal verify turns RED if any claude-owned, unblocked step is left incomplete \u2014 which structurally forces me to do my own work instead of leaving it assigned to John.",
   "title": "Bookie QBO sandbox setup",
   "critical_path_note": "First light (Bookie reading your books) needs only steps 4 and 5 from John. Steps 9-11 are mine. Steps 6-8 are deferred (browser-automation surface, a later phase).",
   "steps": [
     {
-      "id": "1", "title": "Intuit Developer account",
-      "owner": "john", "status": "done", "blocked_on": [],
+      "id": "1",
+      "title": "Intuit Developer account",
+      "owner": "john",
+      "status": "done",
+      "blocked_on": [],
       "why_owner": "Account creation under John's identity",
       "detail": "Signed up at https://developer.intuit.com using john@husband.llc. Builder tier, free."
     },
     {
-      "id": "2", "title": "Workspace + Bookie app",
-      "owner": "john", "status": "done", "blocked_on": [],
+      "id": "2",
+      "title": "Workspace + Bookie app",
+      "owner": "john",
+      "status": "done",
+      "blocked_on": [],
       "why_owner": "Done inside John's authenticated Intuit dashboard",
       "detail": "Workspace created in My Hub > Workspaces; app of type 'QuickBooks Online (Accounting)' named Bookie. AppID bb87a65f..."
     },
     {
-      "id": "3", "title": "Development keys saved to laptop",
-      "owner": "john", "status": "done", "blocked_on": [],
+      "id": "3",
+      "title": "Development keys saved to laptop",
+      "owner": "john",
+      "status": "done",
+      "blocked_on": [],
       "why_owner": "Keys are read from John's authenticated dashboard",
       "detail": "Client ID + Secret from Keys & Credentials > Development saved to /home/john/.config/bookie/qbo-credentials.json (0600, gitignored)."
     },
     {
-      "id": "4", "title": "Fill Intuit Settings tabs, save Redirect URI",
-      "owner": "john", "status": "todo", "blocked_on": [],
-      "why_owner": "Requires John logged into Intuit's dashboard; step 4c (accept legal Terms of Service) must be John's explicit act",
-      "detail": "Fill Basic app info, App URLs (placeholders ok for sandbox), accept Terms of Service, pick Accounting category, set Geolocation=US. Then Redirect URIs unlocks: add http://localhost:8910/qbo-callback (Development pill, no trailing slash). Add same as Reconnect URL.",
-      "estimated_minutes": 5
-    },
-    {
-      "id": "5", "title": "Run OAuth handshake",
-      "owner": "john", "status": "todo", "blocked_on": ["4"],
-      "claude_assist": "I can launch the script; the in-browser Intuit sign-in + Authorize click is John's (auth + consent)",
-      "why_owner": "OAuth consent to grant the app access to QBO data must be John's click, behind his Intuit login + MFA",
-      "detail": "Run: bash /home/john/repos/Bookie/scripts/qbo-authorize.sh — browser opens, sign in as john@husband.llc, choose the sandbox company, click Authorize. Script writes refresh_token + realm_id to the credentials file.",
+      "id": "4",
+      "title": "Add the Development redirect URI (Keys & credentials page)",
+      "owner": "john",
+      "status": "todo",
+      "blocked_on": [],
+      "researched": true,
+      "why_owner": "Requires John logged into his Intuit dashboard",
+      "detail": "IMPORTANT: do NOT use the Settings > Redirect URIs tab \u2014 that one is Production-only and stays locked behind app assessment (that's the production-key message you saw). The Development redirect URI lives elsewhere and needs no approval. Steps: (1) My Hub > Workspaces > your workspace > Bookie app. (2) Left nav: expand DEVELOPMENT SETTINGS (not Production Settings). (3) Click Keys & credentials. (4) You'll see Client ID + Client Secret; scroll down to the Redirect URIs section on that same page. (5) Click Add URI. (6) Type http://localhost:8910/qbo-callback (no trailing slash). (7) Save. (8) If a Reconnect URL field on that page blocks Save, put https://example.com/reconnect in it and Save again. ~1-2 minutes. Verified against current Intuit docs May 2026.",
       "estimated_minutes": 2
     },
     {
-      "id": "6", "title": "Create Bookie bot Intuit user",
-      "owner": "deferred", "status": "deferred", "blocked_on": [],
-      "why_owner": "Browser-automation surface only; not needed for API-based first light",
-      "detail": "Deferred. Needed later for the QBO web-UI automation surface (For Review queue, Bank Rules). Requires account creation + email verification + MFA — John's when we get there."
+      "id": "5",
+      "title": "Run OAuth handshake",
+      "owner": "john",
+      "status": "todo",
+      "blocked_on": [
+        "4"
+      ],
+      "claude_assist": "I can launch the script; the in-browser Intuit sign-in + Authorize click is John's (auth + consent)",
+      "why_owner": "OAuth consent to grant the app access to QBO data must be John's click, behind his Intuit login + MFA",
+      "detail": "Run: bash /home/john/repos/Bookie/scripts/qbo-authorize.sh \u2014 browser opens, sign in as john@husband.llc, choose the sandbox company, click Authorize. Script writes refresh_token + realm_id to the credentials file.",
+      "estimated_minutes": 2,
+      "researched": true,
+      "researched_at": 1780111850.1315815
     },
     {
-      "id": "7", "title": "Invite bot to QBO company",
-      "owner": "deferred", "status": "deferred", "blocked_on": ["6"],
+      "id": "6",
+      "title": "Create Bookie bot Intuit user",
+      "owner": "deferred",
+      "status": "deferred",
+      "blocked_on": [],
+      "why_owner": "Browser-automation surface only; not needed for API-based first light",
+      "detail": "Deferred. Needed later for the QBO web-UI automation surface (For Review queue, Bank Rules). Requires account creation + email verification + MFA \u2014 John's when we get there."
+    },
+    {
+      "id": "7",
+      "title": "Invite bot to QBO company",
+      "owner": "deferred",
+      "status": "deferred",
+      "blocked_on": [
+        "6"
+      ],
       "why_owner": "Depends on step 6",
       "detail": "Deferred with step 6."
     },
     {
-      "id": "8", "title": "Capture bot browser session (one-time MFA)",
-      "owner": "deferred", "status": "deferred", "blocked_on": ["7"],
+      "id": "8",
+      "title": "Capture bot browser session (one-time MFA)",
+      "owner": "deferred",
+      "status": "deferred",
+      "blocked_on": [
+        "7"
+      ],
       "why_owner": "MFA challenge to John's phone; browser-automation surface only",
       "detail": "Deferred with step 6."
     },
     {
-      "id": "9", "title": "Sanity-check the laptop",
-      "owner": "claude", "status": "todo", "blocked_on": ["5"],
-      "why_owner": "Pure commands — ls + bookie self-check. Mine.",
+      "id": "9",
+      "title": "Sanity-check the laptop",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [
+        "5"
+      ],
+      "why_owner": "Pure commands \u2014 ls + bookie self-check. Mine.",
       "detail": "I run: ls -la /home/john/.config/bookie/ ; bash /home/john/repos/Bookie/bin/bookie self-check"
     },
     {
-      "id": "10", "title": "Ship credentials to the VPS",
-      "owner": "claude", "status": "todo", "blocked_on": ["5"],
-      "why_owner": "Pure command — ship-credentials.sh. Mine.",
+      "id": "10",
+      "title": "Ship credentials to the VPS",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [
+        "5"
+      ],
+      "why_owner": "Pure command \u2014 ship-credentials.sh. Mine.",
       "detail": "I run: bash /home/john/repos/OpenHarness/deploy/ship-credentials.sh"
     },
     {
-      "id": "11", "title": "Watch Bookie's first inspection tick",
-      "owner": "claude", "status": "todo", "blocked_on": ["10"],
-      "why_owner": "Pure commands — pull + read inbox. Mine.",
+      "id": "11",
+      "title": "Watch Bookie's first inspection tick",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [
+        "10"
+      ],
+      "why_owner": "Pure commands \u2014 pull + read inbox. Mine.",
       "detail": "I run the pull and read inbox/bookie.md to confirm the first-inspection summary landed."
     }
   ]

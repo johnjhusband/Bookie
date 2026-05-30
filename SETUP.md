@@ -30,11 +30,11 @@ Client ID + Secret from Keys & Credentials > Development saved to /home/john/.co
 
 *Why this is yours and not automatable:* Keys are read from John's authenticated dashboard
 
-### Step 4 — Fill Intuit Settings tabs, save Redirect URI  [JOHN DOES THIS] TODO
+### Step 4 — Add the Development redirect URI (Keys & credentials page)  [JOHN DOES THIS] TODO
 
-Fill Basic app info, App URLs (placeholders ok for sandbox), accept Terms of Service, pick Accounting category, set Geolocation=US. Then Redirect URIs unlocks: add http://localhost:8910/qbo-callback (Development pill, no trailing slash). Add same as Reconnect URL.
+IMPORTANT: do NOT use the Settings > Redirect URIs tab — that one is Production-only and stays locked behind app assessment (that's the production-key message you saw). The Development redirect URI lives elsewhere and needs no approval. Steps: (1) My Hub > Workspaces > your workspace > Bookie app. (2) Left nav: expand DEVELOPMENT SETTINGS (not Production Settings). (3) Click Keys & credentials. (4) You'll see Client ID + Client Secret; scroll down to the Redirect URIs section on that same page. (5) Click Add URI. (6) Type http://localhost:8910/qbo-callback (no trailing slash). (7) Save. (8) If a Reconnect URL field on that page blocks Save, put https://example.com/reconnect in it and Save again. ~1-2 minutes. Verified against current Intuit docs May 2026.
 
-*Why this is yours and not automatable:* Requires John logged into Intuit's dashboard; step 4c (accept legal Terms of Service) must be John's explicit act
+*Why this is yours and not automatable:* Requires John logged into his Intuit dashboard
 
 ### Step 5 — Run OAuth handshake  [JOHN DOES THIS] TODO _(blocked until Step 4 done)_
 
