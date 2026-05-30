@@ -193,8 +193,9 @@ def _process_uncategorized_via_api(emp_workspace: Path) -> dict:
     if not candidates:
         return {"reviewed": 0, "reclassified": 0, "still_uncertain": 0}
 
-    # Run the chain against each
-    coa_patterns: dict[str, list[str]] = {}  # could be populated from vendor patterns later
+    # Run the chain against each, using the Form-1065 CoA patterns
+    from bookie.coa import COA_PATTERNS
+    coa_patterns = COA_PATTERNS
     txs: list[Transaction] = []
     for p in candidates:
         try:

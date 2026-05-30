@@ -133,7 +133,7 @@
       "id": "13",
       "title": "Build Form-1065 Chart-of-Accounts categorization patterns",
       "owner": "claude",
-      "status": "todo",
+      "status": "done",
       "blocked_on": [],
       "why_owner": "Pure build work. Mine.",
       "detail": "Encode the husband-wife LLC / Form-1065 CoA (per-partner equity, draws, contributions; Schedule-C-aligned expense lines) into the categorizer's pattern tables, plus the domain patterns (home office, vehicle, owner draws, mixed personal/business, estimated taxes). Tests."
