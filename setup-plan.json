@@ -167,6 +167,15 @@
       "blocked_on": [],
       "why_owner": "Pure build work \u2014 test every feature; browser.py has none. Mine.",
       "detail": "Add tests/test_browser.py exercising TaskBudget hard-stop caps, config loading, is_available() with mocked Stagehand. Behavioral, no live browser. Closes the feature-module coverage gap the goal criterion flags."
+    },
+    {
+      "id": "17",
+      "title": "Reach the QBO ACCOUNTING company (not QuickBooks Money) and run Bookie against the real books",
+      "owner": "claude",
+      "status": "todo",
+      "blocked_on": [],
+      "why_owner": "Browser automation against qbo.intuit.com with the saved session. Mine.",
+      "detail": "john@husband.llc login lands on QuickBooks Money. Switch realm/company to the QuickBooks Online accounting company (gear > Switch company), confirm Chart of Accounts/Banking present, then drive categorization."
     }
   ]
 }
