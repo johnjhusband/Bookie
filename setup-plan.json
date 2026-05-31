@@ -173,9 +173,21 @@
       "title": "Reach the QBO ACCOUNTING company (not QuickBooks Money) and run Bookie against the real books",
       "owner": "claude",
       "status": "todo",
-      "blocked_on": [],
+      "blocked_on": [
+        "18"
+      ],
       "why_owner": "Browser automation against qbo.intuit.com with the saved session. Mine.",
       "detail": "john@husband.llc login lands on QuickBooks Money. Switch realm/company to the QuickBooks Online accounting company (gear > Switch company), confirm Chart of Accounts/Banking present, then drive categorization."
+    },
+    {
+      "id": "18",
+      "title": "Provide the QuickBooks ONLINE accounting login",
+      "owner": "john",
+      "status": "todo",
+      "blocked_on": [],
+      "researched": true,
+      "why_owner": "Confirmed by automation: john@husband.llc reaches QuickBooks Money only \u2014 no QBO accounting company under it. Need the email/password of the account that holds the QBO Online accounting company (or confirm the company name to target its realm).",
+      "detail": "Give the QBO Online login (likely a different email than john@husband.llc) so Bookie can reach the accounting company."
     }
   ]
 }
