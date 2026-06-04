@@ -1,0 +1,23 @@
+[project]
+name = "bookie"
+version = "0.1.0"
+description = "AI bookkeeper for QuickBooks Online — Claude is the brain, code is only plumbing."
+authors = [{name = "Bookie contributors"}]
+requires-python = ">=3.10"
+dependencies = []
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+# Live QuickBooks Online integration; not required for the unit tests.
+qbo = ["python-quickbooks>=0.9", "intuit-oauth>=1.2"]
+test = ["pytest>=7"]
+
+[project.scripts]
+bookie = "bookie.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

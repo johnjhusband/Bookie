@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Real secrets — never commit
+.env
+.env.local
+config/secrets.local.json
+config/qbo-credentials.json
+# Templates are the only credential files in git
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Owner-specific private business profile — never commit
+*.local.md
+BUSINESS-PRIVATE.local.md
